@@ -30,5 +30,8 @@ pnpm-debug.log*
 # Test
 coverage/
 
+# Circle secrets
+circle-recovery.json
+
 # Misc
 *.tsbuildinfo
