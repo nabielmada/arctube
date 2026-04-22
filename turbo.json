@@ -1,0 +1,41 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".output/**", "dist/**", ".nuxt/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["build"]
+    },
+    "clean": {
+      "cache": false
+    }
+  },
+  "globalEnv": [
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "NUXT_PUBLIC_SUPABASE_URL",
+    "NUXT_PUBLIC_SUPABASE_ANON_KEY",
+    "CIRCLE_API_KEY",
+    "CIRCLE_WALLET_SET_ID",
+    "CIRCLE_ENVIRONMENT",
+    "ARC_RPC_URL",
+    "ARC_CHAIN_ID",
+    "ARC_USDC_CONTRACT",
+    "NUXT_PUBLIC_ARC_EXPLORER",
+    "API_PORT",
+    "NUXT_PUBLIC_API_BASE",
+    "NUXT_PUBLIC_PRICE_PER_SECOND",
+    "NUXT_PUBLIC_FREE_TEASER_SECONDS",
+    "HEARTBEAT_INTERVAL_MS"
+  ]
+}

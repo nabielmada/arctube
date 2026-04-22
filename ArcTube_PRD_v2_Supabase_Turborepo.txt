@@ -1,0 +1,1020 @@
+﻿ArcTube PRD v2.0Supabase + Turborepo Edition
+
+
+
+
+
+
+
+
+
+
+ArcTube
+Pay-Per-Second Video Platform
+Product Requirements Document  ·  v2.0  ·  Supabase + Turborepo Edition
+
+
+
+
+
+
+Settlement
+Arc L1
+	Currency
+USDC
+	DB / Auth
+Supabase
+	Monorepo
+Turborepo
+	
+
+Track
+Real-Time Micro-Commerce + Usage-Based Billing
+	Duration
+3-Day Hackathon
+	Stack
+Nuxt 3 · NestJS · Supabase · Turborepo
+	________________
+
+
+1. Executive Summary
+Mission
+ArcTube adalah platform video Pay-Per-Second (PpS) di mana pengguna membayar $0.001 USDC per detik konten yang ditonton, langsung ke kreator, real-time, tanpa subscription. Model ini hanya bisa eksis karena Arc gas ~$0.000001 — 300.000× lebih murah dari Stripe ($0.30 minimum). Dibangun dengan Supabase (database + auth + realtime) dan Turborepo (monorepo frontend + backend).
+	
+
+1.1 Why Supabase + Turborepo
+Technology
+	Replaces
+	Why Better for Hackathon
+	Supabase (PostgreSQL)
+	Prisma + raw PostgreSQL + custom auth
+	Managed DB + built-in Auth + Realtime subscriptions out-of-box. Zero infra setup.
+	Supabase Auth
+	JWT custom auth + bcrypt + session management
+	Magic link / OAuth dalam hitungan menit. User wallets auto-provisioned on sign-up.
+	Supabase Realtime
+	Redis + Socket.io WebSocket gateway
+	Subscribe ke tabel transactions via Supabase Realtime — USDC meter update otomatis, tanpa WebSocket server terpisah.
+	Supabase Storage
+	Cloudflare R2 / S3
+	Video file storage terintegrasi. Bucket policies untuk gating HLS chunks.
+	Turborepo
+	Nx / manual monorepo scripts
+	Zero-config caching, parallel build, shared packages (types, utils, supabase client) tanpa boilerplate.
+	
+
+1.2 Economic Proof
+Metric
+	Stripe (impossible)
+	Arc Nanopayments
+	Revenue — 120s @ $0.001/s
+	$0.12
+	$0.12
+	Fee per session
+	−$0.30 minimum
+	−$0.00012 (120 txns)
+	Net margin
+	−$0.18 LOSS
+	$0.11988 (99.9%)
+	Fee vs revenue ratio
+	250% overhead
+	0.1% overhead
+	Profitable at
+	Never
+	First second watched
+	________________
+
+
+2. Turborepo Monorepo Structure
+2.1 Repository Layout
+Turborepo Strategy
+Satu repo, dua apps (frontend + backend), tiga shared packages (supabase client, types, utils). Turborepo caches builds dan menjalankan semua dev server paralel dengan `turbo dev`. Tidak perlu lerna, tidak perlu nx.
+	
+
+arctube/                          # root
+├── turbo.json                    # pipeline: build, dev, lint, test
+├── package.json                  # root workspaces
+├── .env                          # shared env (gitignored)
+│
+├── apps/
+│   ├── web/                      # Nuxt.js 3 — viewer & creator UI
+│   │   ├── nuxt.config.ts
+│   │   ├── pages/
+│   │   │   ├── index.vue         # Browse / home
+│   │   │   ├── watch/[id].vue    # Video watch page (payment engine)
+│   │   │   ├── upload.vue        # Creator upload
+│   │   │   ├── dashboard.vue     # Creator earnings dashboard
+│   │   │   └── wallet.vue        # Wallet top-up
+│   │   ├── components/
+│   │   │   ├── VideoPlayer.vue   # HLS player + pay-per-second logic
+│   │   │   ├── USDCMeter.vue     # Animated balance drain
+│   │   │   ├── OwnershipBadge.vue
+│   │   │   └── TxFeed.vue        # Live Arc tx feed
+│   │   └── composables/
+│   │       ├── usePaymentStream.ts
+│   │       ├── useWallet.ts
+│   │       └── useSupabaseRealtime.ts
+│   │
+│   └── api/                      # NestJS — payment engine
+│       ├── src/
+│       │   ├── main.ts
+│       │   ├── app.module.ts
+│       │   ├── auth/             # Supabase JWT validation
+│       │   ├── wallet/           # Circle Wallet service
+│       │   ├── video/            # Video CRUD + Supabase Storage
+│       │   ├── payment/          # Core: heartbeat + ownership
+│       │   └── analytics/        # Per-second revenue data
+│       └── package.json
+│
+└── packages/
+    ├── supabase/                 # Shared Supabase client + types
+    │   ├── src/
+    │   │   ├── client.ts         # createClient() singleton
+    │   │   ├── types.ts          # Database type definitions
+    │   │   └── schema.sql        # Source of truth schema
+    │   └── package.json
+    │
+    ├── types/                    # Shared TypeScript interfaces
+    │   └── src/
+    │       ├── payment.ts        # HeartbeatRequest, HeartbeatResponse
+    │       ├── video.ts          # Video, WatchSession
+    │       └── wallet.ts         # CircleWallet, Balance
+    │
+    └── utils/                    # Shared pure functions
+        └── src/
+            ├── usdc.ts           # formatUSDC, toWei, fromWei
+            └── arc.ts            # Arc explorer URL helpers
+
+
+2.2 turbo.json Pipeline
+{
+  "$schema": "https://turbo.build/schema.json",
+  "pipeline": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".output/**", "dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": { "outputs": [] },
+    "test":  { "dependsOn": ["build"] }
+  }
+}
+
+
+2.3 Root package.json
+{
+  "name": "arctube",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev":   "turbo run dev",
+    "build": "turbo run build",
+    "lint":  "turbo run lint"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
+  }
+}
+________________
+
+
+3. Supabase Database Schema
+Supabase vs Prisma
+Tidak ada Prisma migration. Schema didefinisikan sebagai SQL di packages/supabase/src/schema.sql dan di-run sekali via Supabase Dashboard atau CLI. TypeScript types di-generate otomatis via `supabase gen types typescript`.
+	
+
+3.1 SQL Schema (packages/supabase/src/schema.sql)
+-- Enable UUID extension
+create extension if not exists "uuid-ossp";
+
+
+-- ─── Users (extends Supabase auth.users) ─────────────────────────────
+create table public.profiles (
+  id              uuid references auth.users on delete cascade primary key,
+  wallet_id       text unique not null,   -- Circle Programmable Wallet ID
+  wallet_address  text unique not null,   -- Arc address 0x...
+  usdc_balance    numeric(18,8) default 0,
+  role            text default 'viewer' check (role in ('viewer','creator','admin')),
+  username        text unique,
+  created_at      timestamptz default now()
+);
+
+
+-- Auto-create profile on auth.users insert
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer as $$
+begin
+  insert into public.profiles (id) values (new.id);
+  return new;
+end;
+$$;
+
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+
+-- ─── Videos ───────────────────────────────────────────────────────────
+create table public.videos (
+  id               uuid default uuid_generate_v4() primary key,
+  creator_id       uuid references public.profiles(id) on delete cascade,
+  title            text not null,
+  description      text,
+  duration_seconds int  not null,
+  price_per_second numeric(18,8) default 0.001,   -- USDC per second
+  ownership_price  numeric(18,8) not null,        -- cap for permanent access
+  hls_manifest_url text not null,
+  teaser_seconds   int  default 10,
+  total_earned     numeric(18,8) default 0,
+  status           text default 'active' check (status in ('active','draft','removed')),
+  created_at       timestamptz default now()
+);
+
+
+-- ─── Transactions ─────────────────────────────────────────────────────
+create table public.transactions (
+  id               uuid default uuid_generate_v4() primary key,
+  user_id          uuid references public.profiles(id),
+  video_id         uuid references public.videos(id),
+  amount_usdc      numeric(18,8) not null,
+  arc_tx_hash      text unique,
+  arc_block_number bigint,
+  second_index     int not null,            -- which second this covers
+  status           text default 'confirmed' check (status in ('pending','confirmed','failed')),
+  created_at       timestamptz default now()
+);
+
+
+-- ─── Ownership ────────────────────────────────────────────────────────
+create table public.ownerships (
+  id               uuid default uuid_generate_v4() primary key,
+  user_id          uuid references public.profiles(id),
+  video_id         uuid references public.videos(id),
+  total_paid       numeric(18,8) default 0,
+  is_complete      boolean default false,
+  completed_at     timestamptz,
+  arc_mint_tx_hash text,
+  unique(user_id, video_id)
+);
+
+
+-- ─── Watch Sessions ───────────────────────────────────────────────────
+create table public.watch_sessions (
+  id               uuid default uuid_generate_v4() primary key,
+  user_id          uuid references public.profiles(id),
+  video_id         uuid references public.videos(id),
+  started_at       timestamptz default now(),
+  last_heartbeat   timestamptz default now(),
+  seconds_watched  int default 0,
+  total_paid_usdc  numeric(18,8) default 0,
+  is_active        boolean default true
+);
+
+
+-- ─── Indexes ──────────────────────────────────────────────────────────
+create index on public.transactions(user_id, video_id);
+create index on public.transactions(arc_tx_hash);
+create index on public.ownerships(user_id, video_id);
+create index on public.watch_sessions(user_id, is_active);
+
+
+-- ─── Row Level Security ──────────────────────────────────────────────
+alter table public.profiles    enable row level security;
+alter table public.videos      enable row level security;
+alter table public.transactions enable row level security;
+alter table public.ownerships  enable row level security;
+alter table public.watch_sessions enable row level security;
+
+
+-- Profiles: users can read all, update only own
+create policy "Public profiles"  on public.profiles for select using (true);
+create policy "Own profile edit" on public.profiles for update using (auth.uid() = id);
+
+
+-- Videos: public read, creator write
+create policy "Public videos"    on public.videos for select using (true);
+create policy "Creator insert"   on public.videos for insert with check (auth.uid() = creator_id);
+
+
+-- Transactions: users see their own only
+create policy "Own transactions" on public.transactions for select using (auth.uid() = user_id);
+create policy "Service inserts"  on public.transactions for insert with check (true);
+
+
+3.2 Supabase Client (packages/supabase/src/client.ts)
+import { createClient } from '@supabase/supabase-js';
+import type { Database } from './types';
+
+
+const url  = process.env.NEXT_PUBLIC_SUPABASE_URL  || process.env.SUPABASE_URL!;
+const key  = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY!;
+
+
+export const supabase = createClient<Database>(url, key, {
+  auth: { persistSession: true, autoRefreshToken: true },
+  realtime: { params: { eventsPerSecond: 100 } }  // allow high-freq realtime
+});
+
+
+// Service-role client for backend (bypasses RLS)
+export const supabaseAdmin = createClient<Database>(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+________________
+
+
+4. Supabase Realtime — Replacing WebSocket Server
+Key Architecture Decision
+Daripada membangun WebSocket server terpisah (Socket.io + Redis), kita gunakan Supabase Realtime. Setiap INSERT ke tabel `transactions` otomatis di-broadcast ke semua subscriber. Frontend subscribe ke channel `transactions:user_id=eq.{userId}` dan USDC Meter update secara real-time. Ini menghilangkan seluruh apps/api/src/payment/gateway.ts.
+	
+
+4.1 Frontend Realtime Subscription (composables/useSupabaseRealtime.ts)
+// composables/useSupabaseRealtime.ts
+import { supabase } from '@arctube/supabase';
+
+
+export const useSupabaseRealtime = (userId: string, videoId: string) => {
+  const latestTx   = ref<any>(null);
+  const txCount    = ref(0);
+  const totalPaid  = ref(0);
+
+
+  onMounted(() => {
+    const channel = supabase
+      .channel(`tx-${userId}-${videoId}`)
+      .on('postgres_changes', {
+        event:  'INSERT',
+        schema: 'public',
+        table:  'transactions',
+        filter: `user_id=eq.${userId}`,
+      }, (payload) => {
+        latestTx.value  = payload.new;
+        txCount.value  += 1;
+        totalPaid.value = parseFloat(payload.new.amount_usdc) * txCount.value;
+      })
+      .subscribe();
+
+
+    onUnmounted(() => supabase.removeChannel(channel));
+  });
+
+
+  return { latestTx, txCount, totalPaid };
+};
+
+
+4.2 Ownership Realtime (auto-unlock when cap reached)
+// composables/useOwnershipRealtime.ts
+export const useOwnershipRealtime = (userId: string, videoId: string) => {
+  const isOwned = ref(false);
+
+
+  onMounted(() => {
+    supabase
+      .channel(`ownership-${userId}-${videoId}`)
+      .on('postgres_changes', {
+        event:  'UPDATE',
+        schema: 'public',
+        table:  'ownerships',
+        filter: `user_id=eq.${userId}`,
+      }, (payload) => {
+        if (payload.new.is_complete === true) {
+          isOwned.value = true;
+          // Trigger ownership celebration UI
+        }
+      })
+      .subscribe();
+  });
+
+
+  return { isOwned };
+};
+________________
+
+
+5. NestJS API — Payment Engine
+5.1 Auth Guard (Supabase JWT)
+Supabase Auth Integration
+NestJS tidak perlu auth module sendiri. Setiap request membawa Supabase JWT di header Authorization. Guard memvalidasi token via Supabase Admin SDK dan inject user ke request context.
+	
+
+// src/auth/supabase-auth.guard.ts
+import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { supabaseAdmin } from '@arctube/supabase';
+
+
+@Injectable()
+export class SupabaseAuthGuard implements CanActivate {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    const req   = ctx.switchToHttp().getRequest();
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) throw new UnauthorizedException();
+
+
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) throw new UnauthorizedException();
+
+
+    req.user = user;  // { id, email, ... }
+    return true;
+  }
+}
+
+
+5.2 Payment Service (src/payment/payment.service.ts)
+import { Injectable, BadRequestException } from '@nestjs/common';
+import { supabaseAdmin } from '@arctube/supabase';
+import { CircleWalletService } from '../wallet/circle-wallet.service';
+
+
+@Injectable()
+export class PaymentService {
+  constructor(private circle: CircleWalletService) {}
+
+
+  async processHeartbeat(userId: string, videoId: string, second: number) {
+    // ── 1. Fetch video + ownership in parallel ──────────────────────
+    const [{ data: video }, { data: ownership }] = await Promise.all([
+      supabaseAdmin.from('videos').select('*').eq('id', videoId).single(),
+      supabaseAdmin.from('ownerships')
+        .select('*').eq('user_id', userId).eq('video_id', videoId).maybeSingle()
+    ]);
+
+
+    if (!video) throw new BadRequestException('Video not found');
+    if (ownership?.is_complete) return { success: true, isOwned: true };
+
+
+    // ── 2. Fetch user profile (wallet info + balance) ───────────────
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('*').eq('id', userId).single();
+
+
+    if (!profile) throw new BadRequestException('Profile not found');
+
+
+    const amount = parseFloat(video.price_per_second);
+    if (parseFloat(profile.usdc_balance) < amount)
+      throw new BadRequestException('Insufficient USDC balance');
+
+
+    // ── 3. Execute Circle transfer on Arc ───────────────────────────
+    const { data: creator } = await supabaseAdmin
+      .from('profiles').select('wallet_address').eq('id', video.creator_id).single();
+
+
+    const transfer = await this.circle.transferUSDC({
+      fromWalletId: profile.wallet_id,
+      toAddress:    creator!.wallet_address,
+      amount:       amount.toString(),
+    });
+
+
+    // ── 4. Insert transaction row (triggers Supabase Realtime) ──────
+    await supabaseAdmin.from('transactions').insert({
+      user_id:          userId,
+      video_id:         videoId,
+      amount_usdc:      amount,
+      arc_tx_hash:      transfer.txHash,
+      arc_block_number: transfer.blockNumber,
+      second_index:     second,
+      status:           'confirmed',
+    });
+
+
+    // ── 5. Upsert ownership accumulator ─────────────────────────────
+    const newTotal = (parseFloat(ownership?.total_paid || '0')) + amount;
+    const isOwned  = newTotal >= parseFloat(video.ownership_price);
+
+
+    await supabaseAdmin.from('ownerships').upsert({
+      user_id:    userId,
+      video_id:   videoId,
+      total_paid: newTotal,
+      is_complete: isOwned,
+      ...(isOwned ? { completed_at: new Date().toISOString() } : {})
+    }, { onConflict: 'user_id,video_id' });
+
+
+    // ── 6. Deduct from user balance ──────────────────────────────────
+    await supabaseAdmin.from('profiles').update({
+      usdc_balance: parseFloat(profile.usdc_balance) - amount
+    }).eq('id', userId);
+
+
+    // ── 7. Increment video total_earned ─────────────────────────────
+    await supabaseAdmin.from('videos').update({
+      total_earned: parseFloat(video.total_earned) + amount
+    }).eq('id', videoId);
+
+
+    return {
+      success: true,
+      txHash:  transfer.txHash,
+      arcBlockNumber: transfer.blockNumber,
+      amountPaid:     amount,
+      totalPaidVideo: newTotal,
+      ownershipPrice: parseFloat(video.ownership_price),
+      isOwned,
+      remainingBalance: parseFloat(profile.usdc_balance) - amount,
+    };
+  }
+}
+
+
+5.3 API Endpoints
+Method
+	Endpoint
+	Description
+	POST
+	/auth/provision-wallet
+	Trigger setelah Supabase sign-up: buat Circle Wallet, update profile
+	POST
+	/payment/session/start
+	Validasi balance, cek ownership, buat watch_session row
+	POST
+	/payment/heartbeat
+	CORE: eksekusi Circle transfer + insert transaction (triggers Realtime)
+	POST
+	/payment/session/stop
+	Update watch_session.is_active = false
+	GET
+	/payment/ownership/:videoId
+	Cek apakah user sudah fully-owned video
+	GET
+	/payment/history/:videoId
+	Return semua tx user untuk video (untuk Arc explorer links)
+	POST
+	/video/upload
+	Upload HLS to Supabase Storage, insert videos row
+	GET
+	/video/:id
+	Get video metadata + user ownership status
+	GET
+	/analytics/creator
+	Creator dashboard: per-second earnings breakdown
+	________________
+
+
+6. Frontend Implementation (Nuxt.js 3)
+6.1 usePaymentStream Composable
+// apps/web/composables/usePaymentStream.ts
+import { useSupabaseRealtime } from './useSupabaseRealtime';
+import { useOwnershipRealtime } from './useOwnershipRealtime';
+
+
+export const usePaymentStream = (videoId: string, userId: string) => {
+  const sessionId   = ref<string|null>(null);
+  const isPlaying   = ref(false);
+  const currentSecond = ref(0);
+  const isPaused    = ref(false);
+  let heartbeatTimer: ReturnType<typeof setInterval>|null = null;
+
+
+  // Subscribe to Supabase Realtime (replaces WebSocket)
+  const { latestTx, txCount, totalPaid } = useSupabaseRealtime(userId, videoId);
+  const { isOwned }                       = useOwnershipRealtime(userId, videoId);
+
+
+  const startSession = async () => {
+    const { data } = await $fetch('/api/payment/session/start', {
+      method: 'POST', body: { videoId }
+    });
+    sessionId.value = data.sessionId;
+    if (!data.isAlreadyOwned) startHeartbeat();
+  };
+
+
+  const startHeartbeat = () => {
+    heartbeatTimer = setInterval(async () => {
+      if (!isPlaying.value || isOwned.value || isPaused.value) return;
+
+
+      try {
+        const result = await $fetch('/api/payment/heartbeat', {
+          method: 'POST',
+          body: { sessionId: sessionId.value, videoId, second: currentSecond.value }
+        });
+        // Realtime handles UI updates via Supabase subscription above
+        if (result.isOwned) clearInterval(heartbeatTimer!);
+      } catch (err: any) {
+        if (err.statusCode === 400) {  // insufficient balance
+          isPlaying.value = false;
+          isPaused.value  = true;
+          clearInterval(heartbeatTimer!);
+        }
+      }
+    }, 1000);  // every 1 second
+  };
+
+
+  const onTimeUpdate = (t: number) => { currentSecond.value = Math.floor(t); };
+  const onPlay       = () => { isPlaying.value = true; isPaused.value = false; };
+  const onPause      = () => { isPlaying.value = false; };
+
+
+  onUnmounted(() => { if (heartbeatTimer) clearInterval(heartbeatTimer); });
+
+
+  return { startSession, isPlaying, isOwned, totalPaid, txCount, latestTx, onTimeUpdate, onPlay, onPause };
+};
+
+
+6.2 Supabase Auth in Nuxt
+// apps/web/plugins/supabase.client.ts
+import { supabase } from '@arctube/supabase';
+
+
+export default defineNuxtPlugin(() => {
+  const user = useState('user', () => null);
+
+
+  supabase.auth.onAuthStateChange((event, session) => {
+    user.value = session?.user ?? null;
+    if (event === 'SIGNED_IN' && session) {
+      // Provision Circle wallet if not yet done
+      $fetch('/api/auth/provision-wallet', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` }
+      });
+    }
+  });
+
+
+  return { provide: { supabase } };
+});
+
+
+6.3 USDCMeter Component (key demo element)
+<!-- components/USDCMeter.vue -->
+<template>
+  <div class='usdc-meter'>
+    <div class='header'>
+      <span class='label'>USDC Streaming</span>
+      <span class='amount'>
+        {{ totalPaid.toFixed(4) }} / {{ ownershipPrice }} USDC
+      </span>
+    </div>
+
+
+    <!-- Ownership progress bar -->
+    <div class='bar-bg'>
+      <div class='bar-fill' :style='{ width: pct + "%" }' />
+    </div>
+
+
+    <!-- Live tx feed from Supabase Realtime -->
+    <div class='tx-feed'>
+      <div v-if='latestTx' class='tx-row'>
+        <span class='tx-badge'>TX</span>
+        <a :href='arcExplorerUrl(latestTx.arc_tx_hash)' target='_blank'>
+          {{ short(latestTx.arc_tx_hash) }}
+        </a>
+        <span class='amount'>-{{ latestTx.amount_usdc }} USDC</span>
+      </div>
+      <div class='tx-count'>{{ txCount }} transactions on Arc</div>
+    </div>
+
+
+    <!-- Ownership celebration -->
+    <Transition name='pop'>
+      <div v-if='isOwned' class='owned-banner'>
+        OWNED FOREVER — No more payments
+      </div>
+    </Transition>
+  </div>
+</template>
+________________
+
+
+7. 3-Day Build Plan
+BLOCKING ISSUE — Resolve Day 1 Before Anything Else
+Test Circle Programmable Wallet auto-signing tanpa konfirmasi manual di Arc testnet. Fire 10 txns dalam 10 detik via SDK. Kalau gagal atau butuh manual approve — switch ke Circle Controlled Wallets (server-side). Jangan lanjut ke Day 2 sebelum ini terbukti jalan.
+	
+
+Day 1 — Foundation & Critical Path
+#
+	Task
+	Priority
+	Est.
+	1
+	pnpm create turbo@latest arctube — setup workspaces apps/web, apps/api, packages/*
+	P0
+	30m
+	2
+	Supabase project baru — copy URL + ANON KEY + SERVICE_ROLE_KEY ke .env
+	P0
+	20m
+	3
+	Run schema.sql di Supabase SQL Editor — semua 5 tabel + RLS + trigger
+	P0
+	30m
+	4
+	packages/supabase: supabase gen types typescript > types.ts
+	P0
+	10m
+	5
+	Circle Developer Account + Wallet Set + API Key — simpan ke .env
+	P0
+	20m
+	6
+	BLOCKING TEST: CircleWalletService.transferUSDC() — 10 rapid txns, verify auto-sign
+	P0
+	2h
+	7
+	Jika rate limit terdeteksi — set HEARTBEAT_INTERVAL=5000 (5s) di .env
+	P0
+	15m
+	8
+	apps/api: NestJS bootstrap, SupabaseAuthGuard, CircleWalletService
+	P0
+	2h
+	9
+	POST /auth/provision-wallet — buat Circle Wallet, update profiles row
+	P1
+	1h
+	10
+	Supabase Auth: setup email magic link atau Google OAuth di Supabase Dashboard
+	P1
+	30m
+	11
+	End-to-end test: sign up → wallet auto-provisioned → 0.001 USDC transfer → check Arc explorer
+	P0
+	1h
+	12
+	Seed: 2 test videos + 2 funded testnet wallets
+	P1
+	30m
+	
+
+Day 2 — Payment Engine + Video Player
+#
+	Task
+	Priority
+	Est.
+	13
+	PaymentService.processHeartbeat() — full implementation (Section 5.2)
+	P0
+	3h
+	14
+	PaymentController: POST /heartbeat + /session/start + /session/stop
+	P0
+	1h
+	15
+	Upload 2–3 test videos ke Supabase Storage sebagai HLS (.m3u8 + .ts chunks)
+	P0
+	1h
+	16
+	apps/web: Nuxt setup + Supabase plugin + auth pages (sign-in via magic link)
+	P1
+	1h
+	17
+	usePaymentStream composable — heartbeat timer + API calls
+	P0
+	2h
+	18
+	useSupabaseRealtime + useOwnershipRealtime composables
+	P0
+	1h
+	19
+	VideoPlayer.vue — hls.js integration + timeupdate + paywall blur overlay
+	P0
+	2h
+	20
+	USDCMeter.vue — progress bar + Realtime tx feed + Arc explorer links
+	P1
+	1h
+	21
+	Integration test: tonton 60 detik → 60 txns di Arc explorer → Realtime meter update live
+	P0
+	1h
+	22
+	Capped ownership test: tonton sampai threshold → isOwned = true → payments stop
+	P0
+	30m
+	
+
+Day 3 — Polish + Demo + Submit
+#
+	Task
+	Priority
+	Est.
+	23
+	Creator Dashboard: Supabase query per-second earnings heatmap + total USDC earned
+	P1
+	2h
+	24
+	Browse page: video grid + price/sec badge + teaser thumbnail hover
+	P2
+	1h
+	25
+	GET /analytics/creator — group transactions by second_index untuk heatmap data
+	P1
+	1h
+	26
+	RECORD DEMO EARLY — screen recording with Arc explorer di split view
+	P0
+	1h
+	27
+	Screenshot: Arc block explorer dengan 60+ transactions dari single watch session
+	P0
+	20m
+	28
+	Tulis economic margin explanation (Stripe −$0.18 vs Arc +$0.119) untuk submission
+	P0
+	45m
+	29
+	GitHub README: Turborepo setup guide + Supabase schema setup + demo GIF
+	P1
+	1h
+	30
+	Submit di lablab.ai — semua fields termasuk feedback field ($500 USDC prize)
+	P0
+	30m
+	________________
+
+
+8. Environment Variables
+8.1 Root .env (shared via Turborepo)
+Turborepo .env Strategy
+Satu .env di root. Turborepo otomatis pass env ke semua apps via turbo.json `env` field. Prefix NUXT_PUBLIC_ untuk frontend, tanpa prefix untuk backend.
+	
+
+# ─── Supabase ──────────────────────────────────────────────────
+SUPABASE_URL=https://xxxx.supabase.co
+SUPABASE_ANON_KEY=eyJ...                 # public, safe for frontend
+SUPABASE_SERVICE_ROLE_KEY=eyJ...          # private, backend only
+
+
+# Nuxt (prefix for frontend access)
+NUXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+NUXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+
+
+# ─── Circle ────────────────────────────────────────────────────
+CIRCLE_API_KEY=TEST_API_KEY:xxxx
+CIRCLE_WALLET_SET_ID=xxxx
+CIRCLE_ENVIRONMENT=sandbox
+
+
+# ─── Arc Network ────────────────────────────────────────────────
+ARC_RPC_URL=https://rpc.arc-testnet.io
+ARC_CHAIN_ID=<arc_testnet_chain_id>
+ARC_USDC_CONTRACT=0x<usdc_on_arc>
+NUXT_PUBLIC_ARC_EXPLORER=https://explorer.arc.io
+
+
+# ─── App ────────────────────────────────────────────────────────
+API_PORT=3001
+NUXT_PUBLIC_API_BASE=http://localhost:3001
+JWT_SECRET=not_needed_supabase_handles_auth
+
+
+# ─── Payment Config ─────────────────────────────────────────────
+NUXT_PUBLIC_PRICE_PER_SECOND=0.001
+NUXT_PUBLIC_FREE_TEASER_SECONDS=10
+HEARTBEAT_INTERVAL_MS=1000           # set 5000 if rate-limited
+
+
+8.2 turbo.json with env passthrough
+{
+  "pipeline": {
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "env": [
+        "SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY",
+        "CIRCLE_API_KEY", "CIRCLE_WALLET_SET_ID",
+        "ARC_RPC_URL", "ARC_USDC_CONTRACT",
+        "HEARTBEAT_INTERVAL_MS"
+      ]
+    }
+  }
+}
+________________
+
+
+9. Hackathon Submission Requirements
+9.1 Required Proofs Checklist
+
+
+	Requirement
+	How to Prove
+	✅
+	≥50 on-chain transactions at ≤$0.01 each
+	Screen record: watch 60s video → Arc explorer shows 60+ txns. Screenshot and link in submission.
+	✅
+	Real per-action pricing
+	$0.001/second = 10× below $0.01 cap. Shown in USDCMeter UI and transaction table.
+	✅
+	Transaction frequency data
+	Supabase Dashboard: transactions table with timestamps ≤1s apart. Arc explorer block times confirm.
+	✅
+	Margin explanation
+	Template in Section 9.2 — copy-paste ready.
+	✅
+	Feedback field ($500 USDC)
+	Complete the feedback form thoroughly in lablab.ai submission.
+	
+
+9.2 Economic Margin Template (copy-paste for submission)
+ECONOMIC PROOF — Why This Model Fails with Traditional Payment Infrastructure
+ArcTube charges $0.001 USDC per second of video watched. A typical 2-minute demo generates $0.12 in revenue across 120 separate transactions.With Stripe: Revenue $0.12 minus minimum fee $0.30 equals negative $0.18 net loss. Every single view is guaranteed to lose money. Pay-per-second pricing is mathematically impossible on Web2 infrastructure.With Arc Nanopayments: Revenue $0.12 minus total gas $0.00012 (120 transactions at ~$0.000001 each) equals $0.11988 net profit. Margin: 99.9%. The model is profitable from the very first second watched.Fee ratio difference: 300,000×. This is not a marginal improvement — it is an entirely new economic primitive. Pay-per-second content monetization cannot be added to Web2 infrastructure. It can only exist on Arc.
+	________________
+
+
+10. Risk Matrix & Fallbacks
+Risk
+	Severity
+	Detect (Day 1)
+	Fallback
+	Circle wallet requires manual confirm per tx
+	CRITICAL
+	Fire 10 txns via SDK, check for popup
+	Use Circle Controlled Wallets (server-signs). Same Circle SDK, different wallet type.
+	Circle API rate limit <60 req/min
+	HIGH
+	70 rapid transfers test
+	Set HEARTBEAT_INTERVAL_MS=5000. 5s interval = 12 txns/min = 60 txns in 5-min demo.
+	Supabase Realtime delay >2s
+	MEDIUM
+	Subscribe + insert row, measure latency
+	Poll /payment/history every 2s as fallback. Still shows live updates.
+	Arc testnet unstable during demo
+	HIGH
+	Monitor Arc status 24h before deadline
+	Pre-record demo on stable testnet. Submit recording as primary demo.
+	x402 header integration complex
+	MEDIUM
+	Check docs on Day 1
+	Simulate payment auth in NestJS middleware. Economic model identical.
+	HLS streaming issues in Nuxt
+	MEDIUM
+	Test hls.js with 1 video Day 1
+	Fallback to mp4. Payment heartbeat logic is format-agnostic.
+	Supabase Storage slow for HLS chunks
+	LOW
+	Measure chunk load time
+	Use public CDN URL directly. Storage policies still gate access.
+	________________
+
+
+11. Quick-Start Commands
+11.1 Bootstrap (run once)
+# 1. Clone + install
+git clone https://github.com/yourname/arctube && cd arctube
+pnpm install
+
+
+# 2. Copy env
+cp .env.example .env
+# Fill in: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
+#          CIRCLE_API_KEY, CIRCLE_WALLET_SET_ID, ARC_USDC_CONTRACT
+
+
+# 3. Push Supabase schema
+# Option A — Supabase Dashboard SQL Editor: paste packages/supabase/src/schema.sql
+# Option B — Supabase CLI:
+npx supabase db push
+
+
+# 4. Generate TypeScript types from Supabase
+npx supabase gen types typescript --project-id YOUR_PROJECT_ID \
+  > packages/supabase/src/types.ts
+
+
+# 5. Build shared packages
+pnpm build --filter=@arctube/supabase --filter=@arctube/types --filter=@arctube/utils
+
+
+11.2 Daily Development
+# Start all apps in parallel (Turborepo)
+pnpm dev
+# └── apps/web  → http://localhost:3000 (Nuxt)
+# └── apps/api  → http://localhost:3001 (NestJS)
+
+
+# Rebuild shared packages after changes
+pnpm build --filter=@arctube/supabase
+
+
+# Check Arc testnet balance
+curl https://rpc.arc-testnet.io -X POST -d '{"method":"eth_getBalance",...}'
+
+
+11.3 Demo Recording Checklist
+* Buka browser: arctube di kiri, Arc Explorer di kanan (split screen)
+* Sign in via Supabase magic link
+* Klik video → teaser 10 detik gratis
+* Setelah detik ke-10: USDCMeter mulai bergerak, Arc Explorer mulai update
+* Tonton 60+ detik → screenshot 60+ rows di Arc Explorer
+* Lanjut tonton sampai ownership threshold → badge 'OWNED FOREVER' muncul
+* Buka Supabase Dashboard transactions table — tampilkan 60+ rows dengan timestamps
+* Voiceover: sebutkan $0.001/s dan gas fee ~$0.000001/tx
+Confidential · Hackathon SubmissionArcTube — Pay-Per-Second Video on Arc L1
