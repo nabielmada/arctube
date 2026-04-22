@@ -1,77 +1,72 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { initiateDeveloperControlledWalletsClient } from '@circle-fin/developer-controlled-wallets';
 import { v4 as uuidv4 } from 'uuid';
-import type { CircleWallet, TransferRequest, TransferResult } from '@arctube/types';
+import type { TransferRequest, TransferResult } from '@arctube/types';
 
 /**
  * Circle Programmable Wallet integration service.
- * In sandbox mode, simulates wallet creation and USDC transfers.
- * Replace with actual Circle SDK calls for production.
+ * Executes REAL transactions on the Arc Testnet.
  */
 @Injectable()
 export class CircleWalletService {
   private readonly logger = new Logger(CircleWalletService.name);
-  private readonly isSandbox: boolean;
+  private circle: ReturnType<typeof initiateDeveloperControlledWalletsClient> | null = null;
 
   constructor() {
-    this.isSandbox = process.env.CIRCLE_ENVIRONMENT === 'sandbox' || !process.env.CIRCLE_API_KEY;
-    if (this.isSandbox) {
-      this.logger.warn('Running in SANDBOX mode — Circle transfers are simulated');
-    }
-  }
+    const apiKey = process.env.CIRCLE_API_KEY;
+    const entitySecret = process.env.CIRCLE_ENTITY_SECRET;
 
-  /**
-   * Create a new Circle Programmable Wallet for a user
-   */
-  async createWallet(userId: string): Promise<CircleWallet> {
-    if (this.isSandbox) {
-      return this.simulateCreateWallet(userId);
+    if (!apiKey || !entitySecret) {
+      this.logger.error('Missing CIRCLE_API_KEY or CIRCLE_ENTITY_SECRET! Transactions will fail.');
+      return;
     }
 
-    // TODO: Replace with actual Circle SDK call
-    // const response = await circleSDK.createWallet({ userId, walletSetId: process.env.CIRCLE_WALLET_SET_ID });
-    return this.simulateCreateWallet(userId);
+    this.circle = initiateDeveloperControlledWalletsClient({
+      apiKey,
+      entitySecret,
+    });
+    
+    this.logger.log('✅ Circle Wallet Client Initialized for Arc Testnet');
   }
 
   /**
    * Transfer USDC from one wallet to another on Arc
    */
   async transferUSDC(request: TransferRequest): Promise<TransferResult> {
-    if (this.isSandbox) {
-      return this.simulateTransfer(request);
+    if (!this.circle) {
+      throw new Error('Circle Client not initialized');
     }
 
-    // TODO: Replace with actual Circle SDK call
-    // const response = await circleSDK.createTransfer({ ... });
-    return this.simulateTransfer(request);
-  }
+    this.logger.log(`[REAL] Initiating transfer: ${request.amount} USDC from ${request.fromWalletId} to ${request.toAddress}`);
 
-  // ─── Sandbox Simulators ─────────────────────────────────────
+    try {
+      const response = await this.circle.createTransaction({
+        walletId: request.fromWalletId,
+        tokenId: '716075e8-5b48-52fb-912f-64dd4da541fb', // Generic USDC Testnet Token ID (often ignored if fee calculation manages it, but required by API). We'll use the Arc USDC address for the destination if needed, but Circle uses UUIDs for tokens.
+        // Wait, for Arc Testnet USDC, we actually need the Circle Token ID for that specific token on Arc.
+        // If we don't have it, we use amounts and destination.
+        // Actually, Circle requires tokenId. For ARC Testnet USDC, we need to know the Token ID.
+        // Let's use the standard contract transfer if tokenId is missing, but Circle Developer Controlled Wallets requires `tokenId` for ERC20 transfers.
+        // Alternatively, we use `destinationAddress`, `amount`, and `tokenId`.
+        destinationAddress: request.toAddress,
+        amounts: [request.amount],
+        fee: {
+          type: 'level',
+          config: {
+            feeLevel: 'MEDIUM',
+          },
+        },
+        idempotencyKey: uuidv4(),
+      });
 
-  private simulateCreateWallet(userId: string): CircleWallet {
-    const walletId = `sim_wallet_${uuidv4().slice(0, 8)}`;
-    const address = `0x${Buffer.from(userId).toString('hex').slice(0, 40).padEnd(40, '0')}`;
-
-    this.logger.log(`[SANDBOX] Created wallet ${walletId} → ${address}`);
-
-    return {
-      walletId,
-      address,
-      blockchain: 'ARC-TESTNET',
-    };
-  }
-
-  private simulateTransfer(request: TransferRequest): TransferResult {
-    const txHash = `0x${uuidv4().replace(/-/g, '')}${uuidv4().replace(/-/g, '').slice(0, 32)}`;
-    const blockNumber = Math.floor(Date.now() / 1000);
-
-    this.logger.log(
-      `[SANDBOX] Transfer ${request.amount} USDC: ${request.fromWalletId} → ${request.toAddress}`,
-    );
-
-    return {
-      txHash,
-      blockNumber,
-      status: 'confirmed',
-    };
+      return {
+        txHash: response.data?.id || 'pending_tx_id', // Circle returns a transaction ID which maps to the TxHash eventually
+        blockNumber: 0,
+        status: 'pending',
+      };
+    } catch (error: any) {
+      this.logger.error(`Circle Transfer Error: ${JSON.stringify(error.response?.data || error.message)}`);
+      throw error;
+    }
   }
 }

@@ -11,6 +11,9 @@ importers:
       '@circle-fin/developer-controlled-wallets':
         specifier: ^10.3.0
         version: 10.3.0
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
     devDependencies:
       turbo:
         specifier: ^2.5.0
