@@ -61,7 +61,7 @@
             <TransitionGroup name="slide">
               <div v-for="(tx, i) in recentTxs" :key="tx.hash" class="tx-row">
                 <span class="badge badge-tx">TX</span>
-                <span class="text-mono text-sm" style="color:var(--arc-secondary)">{{ shortH(tx.hash) }}</span>
+                <a :href="`${useRuntimeConfig().public.arcExplorer}/tx/${tx.hash}`" target="_blank" rel="noopener noreferrer" class="text-mono text-sm tx-link" style="color:var(--arc-secondary); text-decoration: underline; text-underline-offset: 2px;">{{ shortH(tx.hash) }}</a>
                 <span class="text-mono text-sm" style="color:var(--arc-danger)">-${{ tx.amount.toFixed(4) }}</span>
                 <span class="text-xs text-dim">{{ tx.ago }}</span>
               </div>
@@ -199,11 +199,14 @@ const onPause = () => {
 };
 
 // ─── Heartbeat Engine ───────────────────────────────────
+let isHeartbeatProcessing = false;
+
 const startHeartbeat = () => {
   if (heartbeatTimer) return;
 
-  heartbeatTimer = setInterval(() => {
+  heartbeatTimer = setInterval(async () => {
     if (!isPlaying.value || isOwned.value || isTeaserPhase.value) return;
+    if (isHeartbeatProcessing) return;
 
     const amt = video.value.pricePerSecond;
 
@@ -216,23 +219,42 @@ const startHeartbeat = () => {
       return;
     }
 
-    // Process payment
-    balance.value -= amt;
-    totalPaid.value += amt;
-    txCount.value += 1;
+    try {
+      isHeartbeatProcessing = true;
+      
+      const config = useRuntimeConfig();
+      const res = await $fetch(`${config.public.apiBase}/payment/heartbeat`, {
+        method: 'POST',
+        body: {
+          sessionId: 'session-123',
+          videoId: video.value.id,
+          second: currentSecond.value
+        }
+      });
 
-    // Generate simulated Arc TX hash
-    const hash = `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')}`;
-    latestTx.value = { arc_tx_hash: hash, amount_usdc: amt };
-    recentTxs.value.unshift({ hash, amount: amt, ago: 'just now' });
-    if (recentTxs.value.length > 30) recentTxs.value.pop();
+      if (res && res.txHash) {
+        // Process payment locally for UI after success
+        balance.value -= amt;
+        totalPaid.value += amt;
+        txCount.value += 1;
 
-    // Check ownership threshold
-    if (totalPaid.value >= video.value.ownershipPrice) {
-      isOwned.value = true;
-      clearHeartbeat();
+        const hash = res.txHash;
+        latestTx.value = { arc_tx_hash: hash, amount_usdc: amt };
+        recentTxs.value.unshift({ hash, amount: amt, ago: 'just now' });
+        if (recentTxs.value.length > 30) recentTxs.value.pop();
+
+        // Check ownership threshold
+        if (totalPaid.value >= video.value.ownershipPrice) {
+          isOwned.value = true;
+          clearHeartbeat();
+        }
+      }
+    } catch (err) {
+      console.error('Heartbeat failed:', err);
+    } finally {
+      isHeartbeatProcessing = false;
     }
-  }, 1000);
+  }, 1000); // Wait 1 second between heartbeats (per-second billing)
 };
 
 const clearHeartbeat = () => {

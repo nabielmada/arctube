@@ -1,75 +1,67 @@
-import { Controller, Get, Post, Body, Param, Req, UseGuards } from '@nestjs/common';
-import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
-import { supabaseAdmin } from '@arctube/supabase';
+import { Controller, Get, Post, Body, Param, Req } from '@nestjs/common';
 
 @Controller('video')
 export class VideoController {
   /** GET /api/video/:id — Public: get video metadata */
   @Get(':id')
   async getVideo(@Param('id') id: string) {
-    const { data: video, error } = await supabaseAdmin
-      .from('videos')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (error || !video) return { error: 'Video not found' };
-
-    // Also fetch creator info
-    const { data: creator } = await supabaseAdmin
-      .from('profiles')
-      .select('username, wallet_address')
-      .eq('id', video.creator_id)
-      .single();
-
+    // Return a mock video
     return {
-      ...video,
-      creator_username: creator?.username,
-      creator_wallet: creator?.wallet_address,
+      id,
+      title: 'Demo Video',
+      description: 'A mock video for the hackathon demo',
+      creator_id: 'creator-123',
+      creator_username: 'demo_creator',
+      creator_wallet: process.env.DESTINATION_WALLET_ADDRESS || '0xDemoWallet',
+      duration_seconds: 60,
+      price_per_second: 0.001,
+      ownership_price: 0.1,
+      teaser_seconds: 10,
+      hls_manifest_url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+      status: 'active',
+      created_at: new Date().toISOString()
     };
   }
 
   /** GET /api/video — Public: list all active videos */
   @Get()
   async listVideos() {
-    const { data } = await supabaseAdmin
-      .from('videos')
-      .select('*, profiles!videos_creator_id_fkey(username)')
-      .eq('status', 'active')
-      .order('created_at', { ascending: false });
-
-    return data || [];
+    return [
+      {
+        id: 'mock-video-1',
+        title: 'Agentic Economy Demo',
+        description: 'Demonstrating programmable USDC on Arc Testnet',
+        creator_id: 'creator-123',
+        duration_seconds: 120,
+        price_per_second: 0.001,
+        ownership_price: 0.1,
+        teaser_seconds: 10,
+        hls_manifest_url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+        status: 'active',
+        created_at: new Date().toISOString(),
+        profiles: { username: 'demo_creator' }
+      }
+    ];
   }
 
   /** POST /api/video/upload — Creator: upload a new video */
   @Post('upload')
-  @UseGuards(SupabaseAuthGuard)
   async uploadVideo(@Req() req: any, @Body() body: any) {
-    const userId = req.user.id;
-
-    // Update user role to creator if not already
-    await supabaseAdmin
-      .from('profiles')
-      .update({ role: 'creator' })
-      .eq('id', userId)
-      .eq('role', 'viewer');
-
-    const { data, error } = await supabaseAdmin
-      .from('videos')
-      .insert({
-        creator_id: userId,
-        title: body.title,
-        description: body.description || null,
-        duration_seconds: body.durationSeconds,
-        price_per_second: body.pricePerSecond || 0.001,
-        ownership_price: body.ownershipPrice,
-        hls_manifest_url: body.hlsManifestUrl,
-        teaser_seconds: body.teaserSeconds || 10,
-      })
-      .select()
-      .single();
-
-    if (error) return { error: error.message };
-    return data;
+    const userId = req.user?.id || 'creator-123';
+    
+    // Return mock created video
+    return {
+      id: 'new-mock-video',
+      creator_id: userId,
+      title: body.title,
+      description: body.description || null,
+      duration_seconds: body.durationSeconds,
+      price_per_second: body.pricePerSecond || 0.001,
+      ownership_price: body.ownershipPrice,
+      hls_manifest_url: body.hlsManifestUrl,
+      teaser_seconds: body.teaserSeconds || 10,
+      status: 'active',
+      created_at: new Date().toISOString()
+    };
   }
 }
