@@ -103,57 +103,10 @@
 </template>
 
 <script setup lang="ts">
-// Mock videos for demo — in production these come from Supabase
-const videos = ref([
-  {
-    id: 'demo-1',
-    title: 'Introduction to Arc L1 Blockchain',
-    description: 'Learn about Arc L1 and why USDC-native gas changes everything',
-    durationSeconds: 120,
-    pricePerSecond: 0.001,
-    ownershipPrice: 5.0,
-    teaserSeconds: 10,
-    totalEarned: 2.45,
-    creatorUsername: 'arc_dev',
-    thumbnail: null,
-  },
-  {
-    id: 'demo-2',
-    title: 'Building Pay-Per-Second dApps',
-    description: 'Full tutorial on nanopayment architecture with Circle wallets',
-    durationSeconds: 300,
-    pricePerSecond: 0.001,
-    ownershipPrice: 12.0,
-    teaserSeconds: 10,
-    totalEarned: 8.12,
-    creatorUsername: 'web3_builder',
-    thumbnail: null,
-  },
-  {
-    id: 'demo-3',
-    title: 'USDC Streaming: The Future of Payments',
-    description: 'Why real-time micropayments will replace subscriptions',
-    durationSeconds: 180,
-    pricePerSecond: 0.001,
-    ownershipPrice: 7.5,
-    teaserSeconds: 10,
-    totalEarned: 4.33,
-    creatorUsername: 'crypto_sage',
-    thumbnail: null,
-  },
-  {
-    id: 'demo-4',
-    title: 'Circle Programmable Wallets Deep Dive',
-    description: 'Auto-signing, wallet sets, and server-controlled transfers',
-    durationSeconds: 240,
-    pricePerSecond: 0.001,
-    ownershipPrice: 10.0,
-    teaserSeconds: 10,
-    totalEarned: 6.78,
-    creatorUsername: 'defi_queen',
-    thumbnail: null,
-  },
-]);
+import { DEMO_VIDEOS } from '~/data/videos';
+
+// Use centralized video catalog — in production these come from Supabase
+const videos = ref(DEMO_VIDEOS);
 
 useHead({
   title: 'ArcTube — Pay-Per-Second Video Platform on Arc L1',
